@@ -22,13 +22,16 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
+import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.SafeBrowsingResponseCompat
+import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewClientCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
+import org.kerifoundation.fort.bridge.BridgeContract
+import org.json.JSONException
+import org.json.JSONObject
 
 class MainActivity : AppCompatActivity() {
     private lateinit var rootLayout: FrameLayout
@@ -37,6 +40,8 @@ class MainActivity : AppCompatActivity() {
 
     private var webView: WebView? = null
     private var rendererRecoveryAttempts = 0
+    private var nativeCommandSequence = 0
+    private var nativeProofDispatched = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -49,11 +54,7 @@ class MainActivity : AppCompatActivity() {
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
             .build()
 
-        ViewCompat.setOnApplyWindowInsetsListener(rootLayout) { view, insets ->
-            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            view.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
-            insets
-        }
+        nativeProofDispatched = false
 
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
             showError(R.string.webview_unsupported_message)
@@ -71,6 +72,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun attachFreshWebView(loadPayload: Boolean) {
         errorView.visibility = View.GONE
+        nativeProofDispatched = false
 
         val freshWebView = createConfiguredWebView()
         rootLayout.addView(freshWebView, 0)
@@ -92,7 +94,7 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 Gravity.CENTER
             )
-            setBackgroundColor(Color.WHITE)
+            setBackgroundColor(Color.TRANSPARENT)
 
             settings.apply {
                 javaScriptEnabled = true
@@ -109,8 +111,52 @@ class MainActivity : AppCompatActivity() {
             }
 
             CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
+            installBridgeListener(this)
             webViewClient = FortWebViewClient()
         }
+    }
+
+    private fun installBridgeListener(target: WebView) {
+        WebViewCompat.addWebMessageListener(
+            target,
+            BridgeContract.HANDLER_NAME,
+            setOf(TRUSTED_ORIGIN_RULE),
+            object : WebViewCompat.WebMessageListener {
+                override fun onPostMessage(
+                    view: WebView,
+                    message: WebMessageCompat,
+                    sourceOrigin: Uri,
+                    isMainFrame: Boolean,
+                    replyProxy: JavaScriptReplyProxy
+                ) {
+                    if (!isMainFrame || !isTrustedBridgeOrigin(sourceOrigin)) {
+                        Log.w(
+                            LOG_TAG,
+                            "Rejected bridge message from origin=$sourceOrigin mainFrame=$isMainFrame"
+                        )
+                        return
+                    }
+
+                    if (message.type != WebMessageCompat.TYPE_STRING) {
+                        Log.w(LOG_TAG, "Rejected non-string bridge payload type=${message.type}")
+                        return
+                    }
+
+                    val rawPayload = message.data
+                    if (rawPayload.isNullOrBlank()) {
+                        Log.w(LOG_TAG, "Rejected empty bridge payload")
+                        return
+                    }
+
+                    if (rawPayload.length > MAX_BRIDGE_PAYLOAD_CHARS) {
+                        Log.w(LOG_TAG, "Rejected oversized bridge payload (${rawPayload.length} chars)")
+                        return
+                    }
+
+                    handleBridgeMessage(rawPayload)
+                }
+            }
+        )
     }
 
     private fun handleExternalNavigation(uri: Uri) {
@@ -145,6 +191,145 @@ class MainActivity : AppCompatActivity() {
             uri.scheme == TRUSTED_SCHEME &&
             uri.host == TRUSTED_HOST &&
             uri.path?.startsWith(TRUSTED_PATH_PREFIX) == true
+    }
+
+    private fun isTrustedBridgeOrigin(uri: Uri?): Boolean {
+        return uri != null &&
+            uri.scheme == TRUSTED_SCHEME &&
+            uri.host == TRUSTED_HOST
+    }
+
+    private fun handleBridgeMessage(rawPayload: String) {
+        val envelope = try {
+            JSONObject(rawPayload)
+        } catch (exception: JSONException) {
+            Log.w(LOG_TAG, "Rejected malformed bridge JSON", exception)
+            return
+        }
+
+        val type = envelope.optString("type")
+        if (type.isBlank()) {
+            Log.w(LOG_TAG, "Rejected bridge payload with missing type")
+            return
+        }
+
+        when (type) {
+            BridgeContract.BRIDGE_LIFECYCLE -> handleLifecycleMessage(envelope)
+
+            BridgeContract.BRIDGE_LOG -> Log.d(
+                LOG_TAG,
+                "bridge log=${boundedLogValue(envelope.optString("message"))}"
+            )
+
+            BridgeContract.BRIDGE_JS_ERROR, BridgeContract.BRIDGE_UNHANDLED_REJECTION -> Log.e(
+                LOG_TAG,
+                "bridge $type=${boundedLogValue(envelope.optString("message"))}"
+            )
+
+            BridgeContract.BRIDGE_CRYPTO_RESULT -> handleCryptoResult(envelope)
+
+            else -> Log.w(LOG_TAG, "Rejected unsupported bridge type=$type")
+        }
+    }
+
+    private fun handleLifecycleMessage(envelope: JSONObject) {
+        val message = envelope.optString("message")
+        Log.i(LOG_TAG, "bridge lifecycle=${boundedLogValue(message)}")
+
+        if (message == BridgeContract.LIFECYCLE_READY && !nativeProofDispatched) {
+            nativeProofDispatched = true
+            dispatchNativeProofCommand()
+        }
+    }
+
+    private fun dispatchNativeProofCommand() {
+        val target = webView ?: run {
+            Log.w(LOG_TAG, "Skipped native proof dispatch because WebView is unavailable")
+            nativeProofDispatched = false
+            return
+        }
+
+        val commandId = "android-proof-${++nativeCommandSequence}"
+        val command = JSONObject()
+            .put("id", commandId)
+            .put("type", BridgeContract.WORKER_CMD_BLAKE3_HASH)
+            .put("data", NATIVE_PROOF_VECTOR)
+
+        val script = buildString {
+            append("(function(){")
+            append("if (typeof window.handleNativeCommand !== 'function') { return 'missing'; }")
+            append("window.handleNativeCommand(")
+            append(command.toString())
+            append(");")
+            append("return 'ok';")
+            append("})();")
+        }
+
+        target.evaluateJavascript(script) { result ->
+            when (result?.trim('"')) {
+                "ok" -> Log.i(LOG_TAG, "Dispatched native proof command id=$commandId")
+                "missing" -> {
+                    nativeProofDispatched = false
+                    Log.w(LOG_TAG, "Native proof dispatch skipped because handleNativeCommand is unavailable")
+                }
+
+                else -> {
+                    nativeProofDispatched = false
+                    Log.w(LOG_TAG, "Native proof dispatch returned unexpected result=$result")
+                }
+            }
+        }
+    }
+
+    private fun handleCryptoResult(envelope: JSONObject) {
+        val operationId = boundedLogValue(envelope.optString("id"))
+        val error = envelope.optString("error").takeIf { it.isNotBlank() }
+        if (error != null) {
+            Log.e(LOG_TAG, "bridge crypto_result id=$operationId error=${boundedLogValue(error)}")
+            return
+        }
+
+        val rawMessage = envelope.optString("message")
+        if (rawMessage.isBlank()) {
+            Log.w(LOG_TAG, "bridge crypto_result id=$operationId missing message payload")
+            return
+        }
+
+        val payload = try {
+            JSONObject(rawMessage)
+        } catch (exception: JSONException) {
+            Log.w(LOG_TAG, "bridge crypto_result id=$operationId malformed payload", exception)
+            return
+        }
+
+        when (payload.optString("type")) {
+            BridgeContract.WORKER_RES_BLAKE3_RESULT -> Log.i(
+                LOG_TAG,
+                "native proof hash=${boundedLogValue(payload.optString("hex"))}"
+            )
+
+            BridgeContract.WORKER_RES_ERROR -> Log.e(
+                LOG_TAG,
+                "bridge crypto_result id=$operationId workerError=${boundedLogValue(payload.optString("error"))}"
+            )
+
+            else -> Log.i(
+                LOG_TAG,
+                "bridge crypto_result id=$operationId type=${boundedLogValue(payload.optString("type"))}"
+            )
+        }
+    }
+
+    private fun boundedLogValue(value: String?, maxLength: Int = MAX_BRIDGE_LOG_VALUE_CHARS): String {
+        if (value.isNullOrBlank()) {
+            return ""
+        }
+
+        return if (value.length <= maxLength) {
+            value
+        } else {
+            value.take(maxLength) + ELLIPSIS
+        }
     }
 
     private inner class FortWebViewClient : WebViewClientCompat() {
@@ -212,8 +397,13 @@ class MainActivity : AppCompatActivity() {
 
     private companion object {
         const val LOG_TAG = "FortAndroid"
+        const val ELLIPSIS = "..."
         const val MAX_RENDERER_RECOVERY_ATTEMPTS = 1
+        const val MAX_BRIDGE_LOG_VALUE_CHARS = 160
+        const val MAX_BRIDGE_PAYLOAD_CHARS = 4096
+        const val NATIVE_PROOF_VECTOR = "android native bridge proof v1"
         const val TRUSTED_HOST = "appassets.androidplatform.net"
+        const val TRUSTED_ORIGIN_RULE = "https://appassets.androidplatform.net"
         const val TRUSTED_PATH_PREFIX = "/assets/"
         const val TRUSTED_SCHEME = "https"
         const val PAYLOAD_URL = "https://appassets.androidplatform.net/assets/payload/index.html"
