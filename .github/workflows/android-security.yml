@@ -39,6 +39,9 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Run Android local unit tests
+        run: ./gradlew :app:testDebugUnitTest --no-daemon
+
       - name: Run Android lint
         run: ./gradlew :app:lint --no-daemon
 
