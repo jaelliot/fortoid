@@ -20,6 +20,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.widget.FrameLayout
 import android.widget.TextView
+import java.io.ByteArrayInputStream
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.webkit.JavaScriptReplyProxy
@@ -32,6 +33,46 @@ import androidx.webkit.WebViewFeature
 import org.kerifoundation.fort.bridge.BridgeContract
 import org.json.JSONException
 import org.json.JSONObject
+
+private const val LOG_TAG = "FortAndroid"
+private const val ELLIPSIS = "..."
+private const val MAX_RENDERER_RECOVERY_ATTEMPTS = 1
+private const val MAX_BRIDGE_LOG_VALUE_CHARS = 160
+private const val MAX_BRIDGE_PAYLOAD_CHARS = 4096
+private const val NATIVE_PROOF_VECTOR = "android native bridge proof v1"
+private const val TRUSTED_HOST = "appassets.androidplatform.net"
+private const val TRUSTED_ORIGIN_RULE = "https://appassets.androidplatform.net"
+private const val TRUSTED_PATH_PREFIX = "/assets/"
+private const val TRUSTED_SCHEME = "https"
+private const val PAYLOAD_URL = "https://appassets.androidplatform.net/assets/payload/index.html"
+
+internal object WebRequestPolicy {
+    internal fun isTrustedPayloadParts(scheme: String?, host: String?, path: String?): Boolean {
+        return scheme == TRUSTED_SCHEME &&
+            host == TRUSTED_HOST &&
+            path?.startsWith(TRUSTED_PATH_PREFIX) == true
+    }
+
+    fun isTrustedPayloadUri(uri: Uri?): Boolean {
+        return uri != null && isTrustedPayloadParts(uri.scheme, uri.host, uri.path)
+    }
+
+    internal fun isTrustedBridgeParts(scheme: String?, host: String?): Boolean {
+        return scheme == TRUSTED_SCHEME && host == TRUSTED_HOST
+    }
+
+    fun isTrustedBridgeOrigin(uri: Uri?): Boolean {
+        return uri != null && isTrustedBridgeParts(uri.scheme, uri.host)
+    }
+
+    fun shouldBlockSubresource(uri: Uri?, isMainFrame: Boolean): Boolean {
+        if (isTrustedPayloadUri(uri)) {
+            return false
+        }
+
+        return !isMainFrame
+    }
+}
 
 class MainActivity : AppCompatActivity() {
     private lateinit var rootLayout: FrameLayout
@@ -129,7 +170,7 @@ class MainActivity : AppCompatActivity() {
                     isMainFrame: Boolean,
                     replyProxy: JavaScriptReplyProxy
                 ) {
-                    if (!isMainFrame || !isTrustedBridgeOrigin(sourceOrigin)) {
+                    if (!isMainFrame || !WebRequestPolicy.isTrustedBridgeOrigin(sourceOrigin)) {
                         Log.w(
                             LOG_TAG,
                             "Rejected bridge message from origin=$sourceOrigin mainFrame=$isMainFrame"
@@ -186,17 +227,15 @@ class MainActivity : AppCompatActivity() {
         target.destroy()
     }
 
-    private fun isTrustedPayloadUri(uri: Uri?): Boolean {
-        return uri != null &&
-            uri.scheme == TRUSTED_SCHEME &&
-            uri.host == TRUSTED_HOST &&
-            uri.path?.startsWith(TRUSTED_PATH_PREFIX) == true
-    }
-
-    private fun isTrustedBridgeOrigin(uri: Uri?): Boolean {
-        return uri != null &&
-            uri.scheme == TRUSTED_SCHEME &&
-            uri.host == TRUSTED_HOST
+    private fun createBlockedSubresourceResponse(): WebResourceResponse {
+        return WebResourceResponse(
+            "text/plain",
+            "utf-8",
+            ByteArrayInputStream(ByteArray(0))
+        ).apply {
+            setStatusCodeAndReasonPhrase(403, "Forbidden")
+            responseHeaders = mapOf("Cache-Control" to "no-store")
+        }
     }
 
     private fun handleBridgeMessage(rawPayload: String) {
@@ -364,7 +403,19 @@ class MainActivity : AppCompatActivity() {
             view: WebView,
             request: WebResourceRequest
         ): WebResourceResponse? {
-            return assetLoader.shouldInterceptRequest(request.url)
+            if (WebRequestPolicy.isTrustedPayloadUri(request.url)) {
+                return assetLoader.shouldInterceptRequest(request.url)
+            }
+
+            if (WebRequestPolicy.shouldBlockSubresource(request.url, request.isForMainFrame)) {
+                Log.w(
+                    LOG_TAG,
+                    "Blocked off-origin subresource url=${boundedLogValue(request.url.toString())}"
+                )
+                return createBlockedSubresourceResponse()
+            }
+
+            return null
         }
 
         override fun shouldOverrideUrlLoading(
@@ -373,7 +424,7 @@ class MainActivity : AppCompatActivity() {
         ): Boolean {
             val uri = request.url
 
-            if (isTrustedPayloadUri(uri)) {
+            if (WebRequestPolicy.isTrustedPayloadUri(uri)) {
                 return false
             }
 
@@ -420,19 +471,5 @@ class MainActivity : AppCompatActivity() {
             attachFreshWebView(loadPayload = true)
             return true
         }
-    }
-
-    private companion object {
-        const val LOG_TAG = "FortAndroid"
-        const val ELLIPSIS = "..."
-        const val MAX_RENDERER_RECOVERY_ATTEMPTS = 1
-        const val MAX_BRIDGE_LOG_VALUE_CHARS = 160
-        const val MAX_BRIDGE_PAYLOAD_CHARS = 4096
-        const val NATIVE_PROOF_VECTOR = "android native bridge proof v1"
-        const val TRUSTED_HOST = "appassets.androidplatform.net"
-        const val TRUSTED_ORIGIN_RULE = "https://appassets.androidplatform.net"
-        const val TRUSTED_PATH_PREFIX = "/assets/"
-        const val TRUSTED_SCHEME = "https"
-        const val PAYLOAD_URL = "https://appassets.androidplatform.net/assets/payload/index.html"
     }
 }
