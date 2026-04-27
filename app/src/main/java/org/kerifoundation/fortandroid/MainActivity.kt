@@ -3,7 +3,6 @@ package org.kerifoundation.fortandroid
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.ApplicationInfo
-import android.graphics.Color
 import android.net.Uri
 import android.net.http.SslError
 import android.os.Bundle
@@ -135,7 +134,12 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 Gravity.CENTER
             )
-            setBackgroundColor(Color.parseColor("#F7F8F4"))
+            val windowBackground = theme.obtainStyledAttributes(intArrayOf(android.R.attr.windowBackground))
+            try {
+                setBackgroundResource(windowBackground.getResourceId(0, R.color.keri_window_light))
+            } finally {
+                windowBackground.recycle()
+            }
 
             settings.apply {
                 javaScriptEnabled = true
