@@ -6,9 +6,11 @@ import android.content.pm.ApplicationInfo
 import android.graphics.Color
 import android.net.Uri
 import android.net.http.SslError
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
@@ -23,6 +25,10 @@ import android.widget.TextView
 import java.io.ByteArrayInputStream
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.graphics.Insets
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.SafeBrowsingResponseCompat
 import androidx.webkit.WebMessageCompat
@@ -42,9 +48,12 @@ private const val MAX_BRIDGE_PAYLOAD_CHARS = 4096
 private const val NATIVE_PROOF_VECTOR = "android native bridge proof v1"
 private const val TRUSTED_HOST = "appassets.androidplatform.net"
 private const val TRUSTED_ORIGIN_RULE = "https://appassets.androidplatform.net"
-private const val TRUSTED_PATH_PREFIX = "/assets/"
+private const val TRUSTED_PATH_PREFIX = "/"
 private const val TRUSTED_SCHEME = "https"
-private const val PAYLOAD_URL = "https://appassets.androidplatform.net/assets/payload/index.html"
+private const val PAYLOAD_URL = "https://appassets.androidplatform.net/index.html"
+private const val PYODIDE_CDN_HOST = "cdn.jsdelivr.net"
+private const val PYODIDE_CDN_PATH_PREFIX = "/pyodide/v"
+private const val BUNDLED_PYODIDE_VERSION = "0.29.3"
 
 internal object WebRequestPolicy {
     internal fun isTrustedPayloadParts(scheme: String?, host: String?, path: String?): Boolean {
@@ -72,6 +81,29 @@ internal object WebRequestPolicy {
 
         return !isMainFrame
     }
+
+    /**
+     * Redirect Pyodide CDN requests to the bundled local copy so the wrapper stays offline.
+     */
+    fun mapPyodideCdnToLocal(uri: Uri?): Uri? {
+        if (uri == null) return null
+        if (uri.host != PYODIDE_CDN_HOST) return null
+        val path = uri.path ?: return null
+        if (!path.startsWith(PYODIDE_CDN_PATH_PREFIX)) return null
+
+        val afterPrefix = path.removePrefix("/pyodide/v")
+        val slashIdx = afterPrefix.indexOf('/')
+        if (slashIdx < 0) return null
+        val remainder = afterPrefix.substring(slashIdx + 1)
+
+        val file = if (remainder.startsWith("full/")) {
+            remainder.removePrefix("full/")
+        } else {
+            remainder
+        }
+
+        return Uri.parse("https://$TRUSTED_HOST/fortweb/vendor/pyodide/$BUNDLED_PYODIDE_VERSION/$file")
+    }
 }
 
 class MainActivity : AppCompatActivity() {
@@ -90,9 +122,19 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         rootLayout = findViewById(R.id.main)
+
+        ViewCompat.setOnApplyWindowInsetsListener(rootLayout) { view, windowInsets ->
+            val types = WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime()
+            val insets = windowInsets.getInsets(types)
+            view.setPadding(insets.left, insets.top, insets.right, insets.bottom)
+
+            WindowInsetsCompat.Builder(windowInsets)
+                .setInsets(types, Insets.NONE)
+                .build()
+        }
         errorView = findViewById(R.id.error_text)
         assetLoader = WebViewAssetLoader.Builder()
-            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .addPathHandler("/", WebViewAssetLoader.AssetsPathHandler(this))
             .build()
 
         nativeProofDispatched = false
@@ -154,6 +196,24 @@ class MainActivity : AppCompatActivity() {
             CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
             installBridgeListener(this)
             webViewClient = FortWebViewClient()
+
+            isFocusable = true
+            isFocusableInTouchMode = true
+            requestFocus(View.FOCUS_DOWN)
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                setAutoHandwritingEnabled(false)
+            }
+
+            @Suppress("ClickableViewAccessibility")
+            setOnTouchListener { v, event ->
+                if (event.action == MotionEvent.ACTION_DOWN) {
+                    v.requestFocus()
+                    val controller = WindowCompat.getInsetsController(window, v)
+                    controller.show(WindowInsetsCompat.Type.ime())
+                }
+                false
+            }
         }
     }
 
@@ -398,13 +458,54 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun addCrossOriginIsolationHeaders(response: WebResourceResponse): WebResourceResponse {
+        val headers = response.responseHeaders?.toMutableMap() ?: mutableMapOf()
+        headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        headers["Cross-Origin-Embedder-Policy"] = "require-corp"
+        headers["Cross-Origin-Resource-Policy"] = "same-origin"
+        response.responseHeaders = headers
+        return response
+    }
+
+    private fun addCdnRedirectHeaders(response: WebResourceResponse): WebResourceResponse {
+        val headers = response.responseHeaders?.toMutableMap() ?: mutableMapOf()
+        headers["Access-Control-Allow-Origin"] = "*"
+        headers["Cross-Origin-Resource-Policy"] = "cross-origin"
+        response.responseHeaders = headers
+        return response
+    }
+
+    private fun injectAndroidSafeAreaOverrides(target: WebView) {
+        val css = ".lk-dialog-root--sheet { align-items: center; }"
+
+        val js = "(function(){" +
+            "var s=document.createElement('style');" +
+            "s.id='android-safe-area-overrides';" +
+            "s.textContent=${JSONObject.quote(css)};" +
+            "var existing=document.getElementById('android-safe-area-overrides');" +
+            "if(existing)existing.remove();" +
+            "document.head.appendChild(s);" +
+            "})()"
+
+        target.evaluateJavascript(js, null)
+        Log.i(LOG_TAG, "Injected Android CSS overrides (dialog centering)")
+    }
+
     private inner class FortWebViewClient : WebViewClientCompat() {
         override fun shouldInterceptRequest(
             view: WebView,
             request: WebResourceRequest
         ): WebResourceResponse? {
             if (WebRequestPolicy.isTrustedPayloadUri(request.url)) {
-                return assetLoader.shouldInterceptRequest(request.url)
+                val response = assetLoader.shouldInterceptRequest(request.url)
+                return response?.let { addCrossOriginIsolationHeaders(it) }
+            }
+
+            val localPyodideUri = WebRequestPolicy.mapPyodideCdnToLocal(request.url)
+            if (localPyodideUri != null) {
+                Log.i(LOG_TAG, "Pyodide CDN redirect: ${request.url.path} -> ${localPyodideUri.path}")
+                val response = assetLoader.shouldInterceptRequest(localPyodideUri)
+                return response?.let { addCdnRedirectHeaders(it) }
             }
 
             if (WebRequestPolicy.shouldBlockSubresource(request.url, request.isForMainFrame)) {
@@ -416,6 +517,11 @@ class MainActivity : AppCompatActivity() {
             }
 
             return null
+        }
+
+        override fun onPageFinished(view: WebView, url: String?) {
+            super.onPageFinished(view, url)
+            injectAndroidSafeAreaOverrides(view)
         }
 
         override fun shouldOverrideUrlLoading(

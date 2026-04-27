@@ -11,7 +11,18 @@ class WebRequestPolicyTest {
             WebRequestPolicy.isTrustedPayloadParts(
                 scheme = "https",
                 host = "appassets.androidplatform.net",
-                path = "/assets/payload/index.html"
+                path = "/index.html"
+            )
+        )
+    }
+
+    @Test
+    fun fortwebSubpathIsTrusted() {
+        assertTrue(
+            WebRequestPolicy.isTrustedPayloadParts(
+                scheme = "https",
+                host = "appassets.androidplatform.net",
+                path = "/fortweb/app/index.html"
             )
         )
     }
@@ -27,12 +38,23 @@ class WebRequestPolicyTest {
     }
 
     @Test
-    fun sameHostOutsideAssetsPrefixIsNotTrustedPayload() {
+    fun wrongHostIsNotTrusted() {
         assertFalse(
             WebRequestPolicy.isTrustedPayloadParts(
                 scheme = "https",
+                host = "example.com",
+                path = "/index.html"
+            )
+        )
+    }
+
+    @Test
+    fun wrongSchemeIsNotTrusted() {
+        assertFalse(
+            WebRequestPolicy.isTrustedPayloadParts(
+                scheme = "http",
                 host = "appassets.androidplatform.net",
-                path = "/other/runtime.js"
+                path = "/index.html"
             )
         )
     }
