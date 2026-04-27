@@ -27,7 +27,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
-import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.SafeBrowsingResponseCompat
@@ -87,11 +86,11 @@ internal object WebRequestPolicy {
      */
     fun mapPyodideCdnToLocal(uri: Uri?): Uri? {
         if (uri == null) return null
-        if (uri.host != PYODIDE_CDN_HOST) return null
+        if (uri.scheme != TRUSTED_SCHEME || uri.host != PYODIDE_CDN_HOST) return null
         val path = uri.path ?: return null
         if (!path.startsWith(PYODIDE_CDN_PATH_PREFIX)) return null
 
-        val afterPrefix = path.removePrefix("/pyodide/v")
+        val afterPrefix = path.removePrefix(PYODIDE_CDN_PATH_PREFIX)
         val slashIdx = afterPrefix.indexOf('/')
         if (slashIdx < 0) return null
         val remainder = afterPrefix.substring(slashIdx + 1)
@@ -207,10 +206,8 @@ class MainActivity : AppCompatActivity() {
 
             @Suppress("ClickableViewAccessibility")
             setOnTouchListener { v, event ->
-                if (event.action == MotionEvent.ACTION_DOWN) {
+                if (event.action == MotionEvent.ACTION_DOWN && !v.isFocused) {
                     v.requestFocus()
-                    val controller = WindowCompat.getInsetsController(window, v)
-                    controller.show(WindowInsetsCompat.Type.ime())
                 }
                 false
             }

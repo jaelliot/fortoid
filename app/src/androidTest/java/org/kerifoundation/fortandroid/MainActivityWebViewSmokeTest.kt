@@ -67,38 +67,44 @@ class MainActivityWebViewSmokeTest {
         assertNotNull("Expected Name input field in dialog", nameField)
         nameField.click()
 
-        Thread.sleep(KEYBOARD_SETTLE_MS)
+        assertTrue(
+            "Expected soft keyboard to be visible after tapping input field",
+            waitForImeVisibility(expectedVisible = true, timeoutMs = KEYBOARD_VISIBILITY_TIMEOUT_MS)
+        )
 
+        device.pressBack()
+
+        assertTrue(
+            "Expected soft keyboard to be hidden after pressing back",
+            waitForImeVisibility(expectedVisible = false, timeoutMs = KEYBOARD_VISIBILITY_TIMEOUT_MS)
+        )
+    }
+
+    private fun waitForImeVisibility(expectedVisible: Boolean, timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        do {
+            if (isImeVisible() == expectedVisible) {
+                return true
+            }
+            device.waitForIdle(KEYBOARD_POLL_INTERVAL_MS)
+        } while (System.currentTimeMillis() < deadline)
+
+        return isImeVisible() == expectedVisible
+    }
+
+    private fun isImeVisible(): Boolean {
         var keyboardVisible = false
         activityRule.scenario.onActivity { activity ->
             val rootView = activity.findViewById<android.view.View>(R.id.main)
             val insets = ViewCompat.getRootWindowInsets(rootView)
             keyboardVisible = insets?.isVisible(WindowInsetsCompat.Type.ime()) == true
         }
-
-        assertTrue(
-            "Expected soft keyboard to be visible after tapping input field",
-            keyboardVisible
-        )
-
-        device.pressBack()
-        Thread.sleep(KEYBOARD_SETTLE_MS)
-
-        var keyboardHidden = false
-        activityRule.scenario.onActivity { activity ->
-            val rootView = activity.findViewById<android.view.View>(R.id.main)
-            val insets = ViewCompat.getRootWindowInsets(rootView)
-            keyboardHidden = insets?.isVisible(WindowInsetsCompat.Type.ime()) != true
-        }
-
-        assertTrue(
-            "Expected soft keyboard to be hidden after pressing back",
-            keyboardHidden
-        )
+        return keyboardVisible
     }
 
     private companion object {
         const val DEFAULT_TIMEOUT_MS = 20_000L
-        const val KEYBOARD_SETTLE_MS = 1_500L
+        const val KEYBOARD_VISIBILITY_TIMEOUT_MS = 5_000L
+        const val KEYBOARD_POLL_INTERVAL_MS = 100L
     }
 }
