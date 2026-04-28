@@ -20,6 +20,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
+import android.webkit.MimeTypeMap
 import android.widget.FrameLayout
 import android.widget.TextView
 import java.io.ByteArrayInputStream
@@ -50,6 +51,8 @@ private const val TRUSTED_ORIGIN_RULE = "https://appassets.androidplatform.net"
 private const val TRUSTED_PATH_PREFIX = "/"
 private const val TRUSTED_SCHEME = "https"
 private const val PAYLOAD_URL = "https://appassets.androidplatform.net/index.html"
+private const val PAYLOAD_ASSET_PREFIX = "payload/"
+private const val PAYLOAD_INDEX_ASSET_PATH = "payload/index.html"
 private const val PYODIDE_CDN_HOST = "cdn.jsdelivr.net"
 private const val PYODIDE_CDN_PATH_PREFIX = "/pyodide/v"
 private const val BUNDLED_PYODIDE_VERSION = "0.29.3"
@@ -133,7 +136,7 @@ class MainActivity : AppCompatActivity() {
         }
         errorView = findViewById(R.id.error_text)
         assetLoader = WebViewAssetLoader.Builder()
-            .addPathHandler("/", WebViewAssetLoader.AssetsPathHandler(this))
+            .addPathHandler("/", PayloadRootPathHandler(WebViewAssetLoader.AssetsPathHandler(this)))
             .build()
 
         nativeProofDispatched = false
@@ -486,6 +489,43 @@ class MainActivity : AppCompatActivity() {
 
         target.evaluateJavascript(js, null)
         Log.i(LOG_TAG, "Injected Android CSS overrides (dialog centering)")
+    }
+
+    private class PayloadRootPathHandler(
+        private val delegate: WebViewAssetLoader.AssetsPathHandler
+    ) : WebViewAssetLoader.PathHandler {
+        private val mimeOverrides = mapOf(
+            "js" to "text/javascript",
+            "mjs" to "text/javascript",
+            "css" to "text/css",
+            "json" to "application/json",
+            "wasm" to "application/wasm",
+            "svg" to "image/svg+xml",
+            "toml" to "application/toml",
+            "whl" to "application/zip",
+            "zip" to "application/zip",
+            "py" to "text/plain"
+        )
+
+        override fun handle(path: String): WebResourceResponse? {
+            val normalizedPath = path.trimStart('/')
+            val assetPath = when {
+                normalizedPath.isEmpty() -> PAYLOAD_INDEX_ASSET_PATH
+                normalizedPath.startsWith(PAYLOAD_ASSET_PREFIX) -> normalizedPath
+                else -> "$PAYLOAD_ASSET_PREFIX$normalizedPath"
+            }
+
+            val response = delegate.handle(assetPath) ?: return null
+            val extension = assetPath.substringAfterLast('.', missingDelimiterValue = "").lowercase()
+            val expectedMimeType = mimeOverrides[extension]
+                ?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+
+            if (!expectedMimeType.isNullOrBlank() && response.mimeType != expectedMimeType) {
+                response.mimeType = expectedMimeType
+            }
+
+            return response
+        }
     }
 
     private inner class FortWebViewClient : WebViewClientCompat() {
