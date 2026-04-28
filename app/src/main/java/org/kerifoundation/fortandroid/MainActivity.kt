@@ -22,6 +22,7 @@ import android.widget.TextView
 import java.io.ByteArrayInputStream
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
+import com.google.android.material.color.MaterialColors
 import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.SafeBrowsingResponseCompat
 import androidx.webkit.WebMessageCompat
@@ -134,12 +135,13 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 Gravity.CENTER
             )
-            val windowBackground = theme.obtainStyledAttributes(intArrayOf(android.R.attr.windowBackground))
-            try {
-                setBackgroundResource(windowBackground.getResourceId(0, R.color.keri_window_light))
-            } finally {
-                windowBackground.recycle()
-            }
+            setBackgroundColor(
+                MaterialColors.getColor(
+                    this@MainActivity,
+                    com.google.android.material.R.attr.colorSurface,
+                    android.graphics.Color.TRANSPARENT,
+                ),
+            )
 
             settings.apply {
                 javaScriptEnabled = true
