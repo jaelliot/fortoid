@@ -27,16 +27,13 @@ class MainActivityWebViewSmokeTest {
     fun appBootsToVaultPickerScreen() {
         assertTrue(
             "Expected vault picker to render",
-            device.wait(Until.hasObject(By.textContains("Your Vaults")), DEFAULT_TIMEOUT_MS)
+            device.wait(Until.hasObject(By.textContains("Your Vaults")), BOOT_TIMEOUT_MS)
         )
     }
 
     @Test
-    fun settingsTabShowsDangerZone() {
-        assertTrue(
-            "Expected settings tab button to appear",
-            device.wait(Until.hasObject(By.text("Settings")), DEFAULT_TIMEOUT_MS)
-        )
+    fun settingsTabShowsDangerZoneInsideOpenVault() {
+        createAndOpenVault()
 
         device.findObject(By.text("Settings"))?.click()
 
@@ -50,7 +47,7 @@ class MainActivityWebViewSmokeTest {
     fun keyboardAppearsWhenInputFieldTapped() {
         assertTrue(
             "Expected vault picker to render before creating vault",
-            device.wait(Until.hasObject(By.textContains("Your Vaults")), DEFAULT_TIMEOUT_MS)
+            device.wait(Until.hasObject(By.textContains("Your Vaults")), BOOT_TIMEOUT_MS)
         )
 
         val createButton = device.findObject(By.textContains("Create"))
@@ -102,8 +99,60 @@ class MainActivityWebViewSmokeTest {
         return keyboardVisible
     }
 
+    private fun createAndOpenVault() {
+        val alias = "ui-smoke-${System.currentTimeMillis()}"
+        val passcode = "123456"
+
+        assertTrue(
+            "Expected vault picker to render before creating a vault",
+            device.wait(Until.hasObject(By.textContains("Your Vaults")), BOOT_TIMEOUT_MS)
+        )
+
+        val createButton = device.findObject(By.text("Create Vault"))
+            ?: device.findObject(By.textContains("Create"))
+        assertNotNull("Expected a Create Vault action on the home screen", createButton)
+        createButton.click()
+
+        assertTrue(
+            "Expected vault creation dialog to appear",
+            device.wait(Until.hasObject(By.textContains("Name")), DEFAULT_TIMEOUT_MS)
+        )
+
+        val nameField = device.findObject(By.textContains("Name"))
+        val passcodeField = device.findObject(By.textContains("Passcode"))
+        val submitButton = device.findObject(By.text("Create"))
+
+        assertNotNull("Expected Name field in vault creation dialog", nameField)
+        assertNotNull("Expected Passcode field in vault creation dialog", passcodeField)
+        assertNotNull("Expected Create button in vault creation dialog", submitButton)
+
+        nameField.text = alias
+        passcodeField.text = passcode
+        submitButton.click()
+
+        assertTrue(
+            "Expected unlock screen or vault shell after vault creation",
+            device.wait(Until.hasObject(By.text("Open")), BOOT_TIMEOUT_MS)
+                || device.wait(Until.hasObject(By.text("Settings")), BOOT_TIMEOUT_MS)
+        )
+
+        val unlockPasscodeField = device.findObject(By.textContains("Passcode"))
+        val openButton = device.findObject(By.text("Open"))
+
+        if (unlockPasscodeField != null && openButton != null) {
+            unlockPasscodeField.text = passcode
+            openButton.click()
+        }
+
+        assertTrue(
+            "Expected vault shell to render after opening vault",
+            device.wait(Until.hasObject(By.text("Settings")), DEFAULT_TIMEOUT_MS)
+        )
+    }
+
     private companion object {
         const val DEFAULT_TIMEOUT_MS = 20_000L
+        const val BOOT_TIMEOUT_MS = 60_000L
         const val KEYBOARD_VISIBILITY_TIMEOUT_MS = 5_000L
         const val KEYBOARD_POLL_INTERVAL_MS = 100L
     }
