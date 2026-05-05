@@ -132,8 +132,7 @@ class MainActivityWebViewSmokeTest {
 
         assertTrue(
             "Expected unlock screen or vault shell after vault creation",
-            device.wait(Until.hasObject(By.text("Open")), BOOT_TIMEOUT_MS)
-                || device.wait(Until.hasObject(By.text("Settings")), BOOT_TIMEOUT_MS)
+            waitForEitherText(firstText = "Open", secondText = "Settings", timeoutMs = BOOT_TIMEOUT_MS)
         )
 
         val unlockPasscodeField = device.findObject(By.textContains("Passcode"))
@@ -150,9 +149,28 @@ class MainActivityWebViewSmokeTest {
         )
     }
 
+    private fun waitForEitherText(firstText: String, secondText: String, timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        do {
+            if (device.hasObject(By.text(firstText)) || device.hasObject(By.text(secondText))) {
+                return true
+            }
+
+            val remainingMs = deadline - System.currentTimeMillis()
+            if (remainingMs <= 0L) {
+                break
+            }
+
+            device.waitForIdle(minOf(UI_POLL_INTERVAL_MS, remainingMs))
+        } while (System.currentTimeMillis() < deadline)
+
+        return device.hasObject(By.text(firstText)) || device.hasObject(By.text(secondText))
+    }
+
     private companion object {
         const val DEFAULT_TIMEOUT_MS = 20_000L
         const val BOOT_TIMEOUT_MS = 60_000L
+        const val UI_POLL_INTERVAL_MS = 100L
         const val KEYBOARD_VISIBILITY_TIMEOUT_MS = 5_000L
         const val KEYBOARD_POLL_INTERVAL_MS = 100L
     }
