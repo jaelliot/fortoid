@@ -12,13 +12,16 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sedi_android_target import select_package, verify_physical_target
+from sedi_android_target import select_package, verify_physical_target, verify_stopped
 
 parser = argparse.ArgumentParser()
 for option in ("adb", "device", "keripy", "fortweb", "output", "manifest-sha256", "fortweb-commit"):
     parser.add_argument(f"--{option}", required=True)
 parser.add_argument("--physical-device", action="store_true")
+parser.add_argument("--app-restart", action="store_true")
 args = parser.parse_args()
+if args.app_restart and not args.physical_device:
+    parser.error("app restart requires the isolated physical-device package")
 try:
     package = select_package(args.device, args.physical_device)
 except ValueError as error:
@@ -68,14 +71,14 @@ test = None
 def receive(name, timeout=240):
     end = time.monotonic() + timeout
     while time.monotonic() < end:
-        if test is not None and test.poll() is not None:
-            raise RuntimeError(f"instrumentation ended before {name}")
         path = f"{remote}/{name}"
         command = f"run-as {package} sh -c 'if [ -f {path} ]; then cat {path}; else exit 42; fi'"
         result = subprocess.run(adb + ["shell", "-T", command], capture_output=True, timeout=15)
         if result.returncode == 0 and result.stdout:
             (root / name).write_bytes(result.stdout)
             return result.stdout
+        if test is not None and test.poll() is not None:
+            raise RuntimeError(f"instrumentation ended before {name}")
         time.sleep(0.1)
     raise TimeoutError(f"device did not provide {name}")
 
@@ -152,19 +155,50 @@ try:
     recovery = json.loads(receive("recovered.json"))
     if any(recovery.get(key) is not True for key in ("credentialRecovered", "bindingRecovered", "grantMetadataRecovered")):
         raise AssertionError("Core recovery was incomplete")
-    children["valid"].stdin.write("recheck\n")
-    children["valid"].stdin.flush()
-    code = children["valid"].wait(timeout=120)
-    outcomes["rechecked"] = code == 0 and "rechecked the original accepted Core Grant" in (root / "verifier-valid.log").read_text()
     native = {"valid": outcomes["valid"], "wrong": outcomes["wrong"], "missing": outcomes["missing"],
-              "missingAgent": outcomes["missing-agent"], "missingProof": outcomes["missing-proof"],
-              "rechecked": outcomes["rechecked"]}
+              "missingAgent": outcomes["missing-agent"], "missingProof": outcomes["missing-proof"]}
+    if not all(native.values()):
+        raise AssertionError("native acceptance or negative checks failed")
     send("native-result.json", json.dumps(native).encode())
+    checkpoint = json.loads(receive("core-checkpoint.json"))
     test_code = test.wait(timeout=120)
     instrumentation_log.flush()
     instrumentation = (root / "instrumentation.log").read_text()
-    if test_code != 0 or "OK (1 test)" not in instrumentation or "INSTRUMENTATION_CODE: -1" not in instrumentation:
+    if (test_code != 0 or "OK (1 test)" not in instrumentation or "INSTRUMENTATION_CODE: -1" not in instrumentation
+            or "INSTRUMENTATION_STATUS_CODE: -3" in instrumentation):
         raise AssertionError("Android instrumentation did not pass exactly one test")
+    from keri import Vrsn_2_0
+    from keri.core import Parser
+    from keri.peer.exchanging import serializeParsedSubstream
+    parsed, = Parser(version=Vrsn_2_0).parse(ims=bytearray(cesr), framed=False, processive=False)
+    nested_hashes = [hashlib.sha256(bytes(serializeParsedSubstream(node))).hexdigest() for node in parsed.nests]
+    if nested_hashes != checkpoint["data"]["snapshot"]["nestedSha256"]:
+        raise AssertionError("persisted Core substreams differ from the accepted Grant")
+    process_recovery = None
+    if args.app_restart:
+        started = time.monotonic()
+        subprocess.run(adb + ["shell", "am", "force-stop", package], check=True, timeout=15)
+        verify_stopped(adb, package)
+        with (root / "instrumentation-read.log").open("w") as read_log:
+            test = subprocess.Popen(adb + ["shell", "am", "instrument", "-w", "-r", "-e", "class",
+                "org.kerifoundation.fortandroid.RuntimeLifecycleDiagnosticTest#syntheticCoreSediPresentation",
+                "-e", "runId", run_id, "-e", "phase", "read", "-e", "manifestSha256", args.manifest_sha256,
+                "-e", "fortwebCommit", args.fortweb_commit, "-e", "expectedPackage", package,
+                f"{test_package}/androidx.test.runner.AndroidJUnitRunner"], stdout=read_log, stderr=subprocess.STDOUT)
+            process_recovery = json.loads(receive("process-recovered.json"))
+            read_code = test.wait(timeout=120)
+        read_output = (root / "instrumentation-read.log").read_text()
+        if (read_code != 0 or "OK (1 test)" not in read_output or "INSTRUMENTATION_CODE: -1" not in read_output
+                or "INSTRUMENTATION_STATUS_CODE: -3" in read_output):
+            raise AssertionError("Core process-recovery instrumentation did not pass")
+        if process_recovery["processId"] == checkpoint["processId"]:
+            raise AssertionError("Core recovery did not use a new app process")
+        process_recovery["writeProcessId"] = checkpoint["processId"]
+        process_recovery["seconds"] = time.monotonic() - started
+    children["valid"].stdin.write("recheck\n")
+    children["valid"].stdin.flush()
+    code = children["valid"].wait(timeout=120)
+    native["rechecked"] = code == 0 and "rechecked the original accepted Core Grant" in (root / "verifier-valid.log").read_text()
     timestamp = datetime.fromisoformat(SerderKERI(raw=cesr).ked["dt"])
     drift, short_lag, *_ = _KRAM_CONFIG["kram"]["caches"]["~"]
     while (datetime.now(timezone.utc) - timestamp).total_seconds() <= (drift + short_lag) / 1000 + 1:
@@ -183,7 +217,9 @@ try:
               "host_received": received_wall.isoformat(),
               "grant_age_at_host_seconds": (received_wall - timestamp).total_seconds(),
               "instrumentation_passed": True, "stale_rejected_by_kram": stale_rejected,
-              "invalid_preflight_rejected_without_kel_change": True, "registry_view_unchanged": True}
+              "invalid_preflight_rejected_without_kel_change": True, "registry_view_unchanged": True,
+              "preflight_signed_state_unchanged": True, "accepted_nested_streams_match": True,
+              "process_recovery": process_recovery}
     (root / "report.json").write_text(json.dumps(report, indent=2))
     print(json.dumps(report), flush=True)
     if not all(native.values()) or not stale_rejected:

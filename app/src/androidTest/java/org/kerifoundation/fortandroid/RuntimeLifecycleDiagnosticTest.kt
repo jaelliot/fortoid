@@ -121,6 +121,8 @@ class RuntimeLifecycleDiagnosticTest {
         assumeTrue("synthetic Core test requires an explicit runId", args.getString("runId") != null)
         val runId = requireNotNull(args.getString("runId"))
         require(runId.matches(Regex("[A-Za-z0-9_-]{1,64}")))
+        val phase = args.getString("phase") ?: "write"
+        require(phase in setOf("write", "read")) { "Invalid Core phase" }
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val expectedPackage = requireNotNull(args.getString("expectedPackage"))
         require(expectedPackage in setOf("org.kerifoundation.fortandroid", "org.kerifoundation.fortandroid.seditest"))
@@ -139,7 +141,18 @@ class RuntimeLifecycleDiagnosticTest {
             assertEquals(item.getString("sha256"), digest(bytes))
         }
         val directory = File(context.filesDir, "sedi-core-$runId")
-        assertTrue("test directory already exists", directory.mkdir())
+        val checkpointFile = File(directory, "core-checkpoint.json")
+        val checkpoint = if (phase == "read") {
+            require(checkpointFile.isFile) { "Core checkpoint is missing" }
+            JSONObject(checkpointFile.readText()).also {
+                require(it.getString("runId") == runId && it.getString("manifestSha256") == digest(manifestBytes))
+                require(it.getInt("processId") != android.os.Process.myPid()) { "Core process did not restart" }
+                require(!File(directory, "process-recovered.json").exists()) { "Core recovery already recorded" }
+            }
+        } else {
+            assertTrue("test directory already exists", directory.mkdir())
+            null
+        }
         fun save(name: String, text: String) {
             val temp = File(directory, "$name.tmp")
             temp.writeText(text)
@@ -181,6 +194,15 @@ class RuntimeLifecycleDiagnosticTest {
                 }
                 error("Timed out during $name")
             }
+            if (phase == "read") {
+                val recovered = JSONObject(action("resume", requireNotNull(checkpoint).getJSONObject("data").toString()))
+                assertTrue("Core recovery failed", recovered.optBoolean("recovered"))
+                assertTrue("missing credential was not rejected", recovered.optBoolean("missingCredentialRejected"))
+                assertTrue("mismatched binding was not rejected", recovered.optBoolean("mismatchedBindingRejected"))
+                recovered.put("processId", android.os.Process.myPid())
+                save("process-recovered.json", recovered.toString())
+                return@use
+            }
             save("holder.json", action("setup", runId))
             val ready = action("prepare", awaitFile("fixture.json"))
             val prepared = JSONObject(ready)
@@ -196,8 +218,16 @@ class RuntimeLifecycleDiagnosticTest {
             save("fortweb-presentation.json", presentation)
             save("recovered.json", action("recover", ""))
             val native = JSONObject(awaitFile("native-result.json"))
-            for (key in listOf("valid", "wrong", "missing", "missingAgent", "missingProof", "rechecked")) {
+            for (key in listOf("valid", "wrong", "missing", "missingAgent", "missingProof")) {
                 assertTrue("native verifier did not pass $key", native.optBoolean(key))
+            }
+            val data = JSONObject(action("checkpoint", ""))
+            val saved = JSONObject().put("runId", runId).put("manifestSha256", digest(manifestBytes))
+                .put("processId", android.os.Process.myPid()).put("data", data)
+            assertTrue("Core checkpoint already exists", checkpointFile.createNewFile())
+            FileOutputStream(checkpointFile).use { stream ->
+                stream.write(saved.toString().toByteArray(Charsets.UTF_8))
+                stream.fd.sync()
             }
         }
     }

@@ -31,3 +31,11 @@ def verify_physical_target(adb, serial):
     if expected not in instrumentation.splitlines():
         raise RuntimeError("isolated instrumentation package or target is missing")
     text("shell", "run-as", PHYSICAL_PACKAGE, "id")
+
+
+def verify_stopped(adb, package):
+    if package != PHYSICAL_PACKAGE:
+        raise ValueError("only the isolated development app may be stopped")
+    result = subprocess.run(adb + ["shell", "pidof", package], capture_output=True, text=True, timeout=15)
+    if result.returncode != 1 or result.stdout.strip() or result.stderr.strip():
+        raise RuntimeError("could not confirm the isolated application process stopped")

@@ -53,9 +53,9 @@ missing authority, missing proof and stale replay. It then rechecks the
 original accepted exchange after a worker restart. A successful command exits
 zero and writes a report and verifier logs; a partial report is not a pass.
 
-Invalid preflight inputs are checked against the exported holder KEL and the
-registry's public view. This test does not directly compare every TEL byte or
-prove that application-owned Grant outbox persistence exists. The recovered
+Invalid preflight inputs are checked against the exported holder KEL, registry
+view, and hashes of the test vault's relevant signed-state stores and pending
+markers. The recovered
 Grant bytes are test-owned. The separate single-credential lifecycle diagnostic
 can exercise process-restart and offline recovery; that result is not Core
 process-restart or offline acceptance. Its write phase saves a synthetic
@@ -79,7 +79,8 @@ Physical-device testing is opt-in and uses the separate debug application ID
 `org.kerifoundation.fortandroid.seditest.test`. The standard app and its data
 must be left intact. Before installing, select the intended device by its exact
 ADB serial and check every device user, including retained packages, for both
-test IDs. Stop if either ID already exists or if the device is not authorized.
+test IDs. Stop if the device is unauthorized or an existing package cannot be
+identified as the isolated test installation.
 
 After importing the qualified runtime as above, build both APKs:
 
@@ -92,9 +93,9 @@ shared user ID, and use the test application ID; the instrumentation APK must
 use the test ID, target that application ID, and have the same signing
 certificate. Verify the packaged runtime with the command above.
 
-With those checks complete, install the app and then the instrumentation APK
+For an initial installation, install the app and then the instrumentation APK
 using `adb -s "$ANDROID_SERIAL" install` and their respective paths above.
-Do not replace an existing package, uninstall anything, or clear app data. If
+Do not replace an existing wallet app, uninstall anything, or clear app data. If
 installation fails, preserve the error and investigate without bypassing the
 device's verification. Check that the phone's clock agrees with the host before
 running the host command above with `--device "$ANDROID_SERIAL"` and the
@@ -103,3 +104,51 @@ isolated instrumentation target, app debuggability, and clock before running.
 Keep the device's network settings unchanged; an offline test requires separate
 authorization. A successful physical run must be recorded separately from the
 emulator result, and the limitations described above still apply.
+
+### Core recovery after application restart
+
+Use the same command with both `--physical-device` and `--app-restart` to run
+the write, confirmed process-stop and read phases without reinstalling the app.
+The physical mode checks the exact isolated test package before stopping it.
+The runner creates a fresh synthetic vault and result directory on each run.
+Record the Android source revision with `git rev-parse HEAD` and hash both APKs
+and the runtime ZIP before testing. If the isolated test app is already
+installed, update its instrumentation package only after checking its package
+ID, target and signing certificate; do not replace the app or any other package.
+
+With the verified test app and matching instrumentation already installed:
+
+```sh
+shasum -a 256 "$FORTWEB_RUNTIME_ZIP" app/build/outputs/apk/debug/app-debug.apk \
+  app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+git rev-parse HEAD
+"$KERIPY_PYTHON" tools/sedi-core-android-test.py \
+  --physical-device --app-restart --adb "$(command -v adb)" --device "$ANDROID_SERIAL" \
+  --keripy "$KERIPY_SOURCE" --fortweb "$FORTWEB_SOURCE" --output "$NEW_RESULTS_DIRECTORY" \
+  --manifest-sha256 4b5197f8d91ecda56260e7cc7337d85586499cc3c668342e9757d7de81182629 \
+  --fortweb-commit 374583defa75a6e2e0eb933e5a3cbdef192f79e4
+```
+
+The write phase validates the fresh Grant with native KERIpy and closes the
+vault before saving a test-owned checkpoint containing public identifiers and
+digests. The read phase requires that checkpoint and a different process, opens
+the same vault, and reads the existing Core credential, Grant metadata,
+presentation binding and targeted signed-state stores. It compares nested Grant
+substreams with the original independently accepted Grant, rejects missing
+credentials and mismatched bindings, and checks pending markers. The existing
+native verifier then rechecks the accepted historical exchange without treating
+it as a fresh KRAM request.
+
+The binding comparison reads the existing test record directly: the normal
+`registries.present` operation may create a missing binding and therefore is
+not suitable as a recovery assertion. Presentation TEL event bytes are checked
+against the original Grant result as well as the stored registry hashes.
+
+This proves only the recorded synthetic state and targeted store comparisons.
+The verifier retains its own accepted exchange; the test does not establish a
+complete application-owned IPEX outbox or independent recovery of every
+authority registry. A missing or duplicate checkpoint, incomplete report,
+failed instrumentation, or failed native recheck is a failure. Preserve the
+synthetic app state and result directory; do not clear state or retry writes in
+the same vault. Offline cold-launch recovery is separate and remains untested
+unless explicitly authorized and performed.

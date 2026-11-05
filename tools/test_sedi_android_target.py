@@ -3,14 +3,27 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from sedi_android_target import EMULATOR_PACKAGE, PHYSICAL_PACKAGE, select_package, verify_physical_target
+from sedi_android_target import EMULATOR_PACKAGE, PHYSICAL_PACKAGE, select_package, verify_physical_target, verify_stopped
 
 
-def response(stdout="", returncode=0):
-    return SimpleNamespace(stdout=stdout, returncode=returncode)
+def response(stdout="", returncode=0, stderr=""):
+    return SimpleNamespace(stdout=stdout, returncode=returncode, stderr=stderr)
 
 
 class AndroidTargetTest(unittest.TestCase):
+    def test_stop_requires_unambiguous_pidof_result_and_isolated_package(self):
+        adb = ["adb", "-s", "SERIAL"]
+        with patch("sedi_android_target.subprocess.run", return_value=response(returncode=1)) as run:
+            verify_stopped(adb, PHYSICAL_PACKAGE)
+            run.assert_called_once_with(adb + ["shell", "pidof", PHYSICAL_PACKAGE],
+                                        capture_output=True, text=True, timeout=15)
+        for result in (response("1234"), response(returncode=255), response(returncode=1, stderr="device offline")):
+            with self.subTest(result=result), patch("sedi_android_target.subprocess.run", return_value=result):
+                with self.assertRaisesRegex(RuntimeError, "could not confirm"):
+                    verify_stopped(adb, PHYSICAL_PACKAGE)
+        with self.assertRaises(ValueError):
+            verify_stopped(adb, EMULATOR_PACKAGE)
+
     def test_modes_require_explicit_physical_opt_in(self):
         self.assertEqual(select_package("emulator-5554", False), EMULATOR_PACKAGE)
         self.assertEqual(select_package("SERIAL", True), PHYSICAL_PACKAGE)
