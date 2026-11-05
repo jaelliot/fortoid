@@ -1,0 +1,70 @@
+# Synthetic Core SEDI test on Android
+
+This developer test uses a bundled FortWeb worker in Android WebView and the
+independent native KERIpy verifier. The emulator supplies the holder and Grant;
+the Mac supplies synthetic authority fixtures and receives the Grant through
+`adb`. This is not a live service exchange or production qualification. Use
+synthetic data only. The diagnostics require an explicit test run ID and are
+skipped by ordinary instrumentation runs without one.
+
+## Inputs
+
+- An Android emulator, the Android SDK, a JDK, and a Python environment with
+  the KERIpy test dependencies. The test refuses physical-device identifiers.
+- FortWeb checkout at `374583defa75a6e2e0eb933e5a3cbdef192f79e4`, with the
+  committed Core fixture and native-verifier scripts unchanged.
+- Native KERIpy source at `84301a9ff4bbb644ce134f9649ad56b49aa130f2`. The
+  host test checks the two reference files used by the verifier.
+- The qualified FortWeb ZIP with SHA-256
+  `425e06847dbdb617b27a5bf66ebed0bec8336dae0c18902d3f30a37b814cfb36`, and
+  manifest SHA-256
+  `4b5197f8d91ecda56260e7cc7337d85586499cc3c668342e9757d7de81182629`.
+- An emulator clock within one second of the host. The test refuses a larger
+  difference instead of altering signed messages or relaxing KRAM freshness.
+
+## Build and run
+
+From this test branch, verify the ZIP checksum and lock, then use the canonical
+importer. The `-r` installs update the emulator apps without clearing data.
+Choose a new results directory for each run.
+
+```sh
+shasum -a 256 "$FORTWEB_RUNTIME_ZIP"
+cat config/fortweb-runtime.json
+./sync-payload.sh --package "$FORTWEB_RUNTIME_ZIP"
+node tools/validate-staged-payload.mjs
+./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
+node tools/verify-packaged-runtime.mjs --apk app/build/outputs/apk/debug/app-debug.apk
+adb -s "$ANDROID_EMULATOR" install -r app/build/outputs/apk/debug/app-debug.apk
+adb -s "$ANDROID_EMULATOR" install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+"$KERIPY_PYTHON" tools/sedi-core-android-test.py \
+  --adb "$(command -v adb)" --device "$ANDROID_EMULATOR" \
+  --keripy "$KERIPY_SOURCE" --fortweb "$FORTWEB_SOURCE" \
+  --output "$NEW_RESULTS_DIRECTORY" \
+  --manifest-sha256 4b5197f8d91ecda56260e7cc7337d85586499cc3c668342e9757d7de81182629 \
+  --fortweb-commit 374583defa75a6e2e0eb933e5a3cbdef192f79e4
+```
+
+The test checks the installed manifest and all 160 files, creates fresh
+synthetic holder state, preloads the native verifier, and transfers the signed
+Grant. It compares the device and host CESR hashes. The verifier accepts the
+fresh Grant under the reference KRAM configuration and checks wrong binding,
+missing authority, missing proof and stale replay. It then rechecks the
+original accepted exchange after a worker restart. A successful command exits
+zero and writes a report and verifier logs; a partial report is not a pass.
+
+Invalid preflight inputs are checked against the exported holder KEL and the
+registry's public view. This test does not directly compare every TEL byte or
+prove that application-owned Grant outbox persistence exists. The recovered
+Grant bytes are test-owned. The separate single-credential lifecycle diagnostic
+can exercise process-restart and offline recovery; that result is not Core
+process-restart or offline acceptance.
+
+If clocks differ, correct the emulator's system clock using its normal time
+settings and restore any temporary setting afterward. Never change the signed
+timestamp or verifier freshness settings. Preserve failed outputs and signed
+state; do not clear a pending marker. Raw outputs contain synthetic evidence
+and local metadata and should be reviewed before sharing.
+
+The runtime v2, fetched-WebAssembly, signing-root confidentiality, and pending
+operation recovery boundaries remain open independently of this test.
