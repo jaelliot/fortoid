@@ -58,7 +58,10 @@ registry's public view. This test does not directly compare every TEL byte or
 prove that application-owned Grant outbox persistence exists. The recovered
 Grant bytes are test-owned. The separate single-credential lifecycle diagnostic
 can exercise process-restart and offline recovery; that result is not Core
-process-restart or offline acceptance.
+process-restart or offline acceptance. Its write phase saves a synthetic
+checkpoint in the test app's private files; the read phase requires that same
+checkpoint and a new process. A missing checkpoint fails without creating a
+new synthetic credential.
 
 If clocks differ, correct the emulator's system clock using its normal time
 settings and restore any temporary setting afterward. Never change the signed

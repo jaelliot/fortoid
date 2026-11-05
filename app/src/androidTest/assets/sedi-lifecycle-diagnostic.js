@@ -1,7 +1,7 @@
 (async () => {
 const schema = "{\"$id\":\"EPrsJF2BXyDUgDCVbGURsGNwCZjyrxD5M2qnBmhvoZYQ\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\n    \"title\":\"ACM Default Schema\",\"description\":\"Default JSON Schema for acm ACDC.\",\n    \"credentialType\":\"ACDC_acm_message\",\"version\":\"2.0.0\",\"type\":\"object\",\"required\":[\"v\",\"d\",\"i\",\"s\"],\n    \"properties\":{\"v\":{\"description\":\"ACDC version string\",\"type\":\"string\"},\n    \"t\":{\"description\":\"Message type\",\"type\":\"string\"},\"d\":{\"description\":\"Message SAID\",\"type\":\"string\"},\n    \"u\":{\"description\":\"Message UUID\",\"type\":\"string\"},\"i\":{\"description\":\"Issuer AID\",\"type\":\"string\"},\n    \"rd\":{\"description\":\"Registry SAID\",\"type\":\"string\"},\"s\":{\"description\":\"Schema Section\",\"oneOf\":[\n    {\"description\":\"Schema Section SAID\",\"type\":\"string\"},\n    {\"description\":\"Uncompacted Schema Section\",\"type\":\"object\"}]},\n    \"a\":{\"description\":\"Attribute Section\",\"oneOf\":[{\"description\":\"Attribute Section SAID\",\"type\":\"string\"},\n    {\"description\":\"Uncompacted Attribute Section\",\"type\":\"object\"}]},\n    \"A\":{\"description\":\"Aggregate Section\",\"oneOf\":[{\"description\":\"Aggregate Section AGID\",\"type\":\"string\"},\n    {\"description\":\"Uncompacted Aggregate Section\",\"type\":\"array\"}]},\n    \"e\":{\"description\":\"Edge Section\",\"oneOf\":[{\"description\":\"Edge Section SAID\",\"type\":\"string\"},\n    {\"description\":\"Uncompacted Edge Section\",\"type\":\"object\"}]},\"r\":{\"description\":\"Rule Section\",\"oneOf\":[\n    {\"description\":\"Rule Section SAID\",\"type\":\"string\"},\n    {\"description\":\"Uncompacted Rule Section\",\"type\":\"object\"}]}},\n    \"additionalProperties\":false}";
 const persistent = true;
-const checkpoint = JSON.parse(localStorage.getItem("sedi-android-test-checkpoint") || "{}");
+const checkpoint = __CHECKPOINT_JSON__;
 const processId = __PROCESS_ID__;
 const result = await (async () => {
 
@@ -258,6 +258,6 @@ const result = await (async () => {
     }
 
 })();
-if (result.ok && result.checkpoint) localStorage.setItem("sedi-android-test-checkpoint", JSON.stringify(result.checkpoint));
+window.__sediLifecycleCheckpoint = result.ok ? result.checkpoint ?? null : null;
 window.__sediLifecycleResult = {ok: result.ok, phase: result.phase, stage: result.stage, code: result.code};
 })().catch(error => { window.__sediLifecycleResult = {ok:false, stage:"harness", code:error.name}; });

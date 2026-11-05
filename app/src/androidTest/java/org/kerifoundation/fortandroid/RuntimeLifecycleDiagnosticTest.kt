@@ -14,6 +14,7 @@ import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.io.File
 import java.security.MessageDigest
 import android.util.Base64
@@ -59,10 +60,20 @@ class RuntimeLifecycleDiagnosticTest {
         assumeTrue("synthetic lifecycle requires an explicit runId", arguments.getString("runId") != null)
         val runId = requireNotNull(arguments.getString("runId")) { "runId is required" }
         require(runId.matches(Regex("[A-Za-z0-9_-]{1,64}"))) { "Invalid runId" }
+        require(expectedPhase in setOf("write", "read")) { "Invalid phase" }
+        val checkpointFile = File(InstrumentationRegistry.getInstrumentation().targetContext.filesDir,
+            "sedi-lifecycle-checkpoint-$runId.json")
+        val checkpoint = if (expectedPhase == "read") {
+            require(checkpointFile.isFile) { "Synthetic checkpoint is missing" }
+            JSONObject(checkpointFile.readText())
+        } else {
+            require(!checkpointFile.exists()) { "Synthetic checkpoint already exists" }
+            JSONObject()
+        }
         val fixture = InstrumentationRegistry.getInstrumentation().context.assets
             .open("sedi-lifecycle-diagnostic.js").bufferedReader().use { it.readText() }
             .replace("__PROCESS_ID__", android.os.Process.myPid().toString())
-            .replace("sedi-android-test-checkpoint", "sedi-android-test-checkpoint-$runId")
+            .replace("__CHECKPOINT_JSON__", checkpoint.toString())
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             fun evaluate(script: String) = evaluate(scenario, script)
             val deadline = SystemClock.elapsedRealtime() + 420_000
@@ -91,6 +102,16 @@ class RuntimeLifecycleDiagnosticTest {
             Log.i("SediLifecycleDiagnostic", "outcome=$outcome")
             assertTrue("lifecycle did not complete: $outcome", outcome.optBoolean("ok"))
             assertEquals(expectedPhase, outcome.optString("phase"))
+            if (expectedPhase == "write") {
+                val raw = requireNotNull(evaluate("JSON.stringify(window.__sediLifecycleCheckpoint)"))
+                val saved = JSONObject(JSONTokener(raw).nextValue() as String)
+                assertEquals(android.os.Process.myPid(), saved.getInt("processId"))
+                assertTrue("synthetic checkpoint already exists", checkpointFile.createNewFile())
+                FileOutputStream(checkpointFile).use { stream ->
+                    stream.write(saved.toString().toByteArray(Charsets.UTF_8))
+                    stream.fd.sync()
+                }
+            }
         }
     }
 
