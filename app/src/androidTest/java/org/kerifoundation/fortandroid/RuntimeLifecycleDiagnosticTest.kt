@@ -101,6 +101,9 @@ class RuntimeLifecycleDiagnosticTest {
         val runId = requireNotNull(args.getString("runId"))
         require(runId.matches(Regex("[A-Za-z0-9_-]{1,64}")))
         val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val expectedPackage = requireNotNull(args.getString("expectedPackage"))
+        require(expectedPackage in setOf("org.kerifoundation.fortandroid", "org.kerifoundation.fortandroid.seditest"))
+        assertEquals("unexpected test app", expectedPackage, context.packageName)
         val manifestBytes = context.assets.open("payload/manifest.json").use { it.readBytes() }
         fun digest(data: ByteArray) = MessageDigest.getInstance("SHA-256").digest(data)
             .joinToString("") { "%02x".format(it) }

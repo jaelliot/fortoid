@@ -1,16 +1,16 @@
 # Synthetic Core SEDI test on Android
 
 This developer test uses a bundled FortWeb worker in Android WebView and the
-independent native KERIpy verifier. The emulator supplies the holder and Grant;
-the Mac supplies synthetic authority fixtures and receives the Grant through
-`adb`. This is not a live service exchange or production qualification. Use
+independent native KERIpy verifier. The Android device supplies the holder and
+Grant; the Mac supplies synthetic authority fixtures and receives the Grant
+through `adb`. This is not a live service exchange or production qualification. Use
 synthetic data only. The diagnostics require an explicit test run ID and are
 skipped by ordinary instrumentation runs without one.
 
 ## Inputs
 
-- An Android emulator, the Android SDK, a JDK, and a Python environment with
-  the KERIpy test dependencies. The test refuses physical-device identifiers.
+- An Android emulator or an explicitly selected physical device, the Android
+  SDK, a JDK, and a Python environment with the KERIpy test dependencies.
 - FortWeb checkout at `374583defa75a6e2e0eb933e5a3cbdef192f79e4`, with the
   committed Core fixture and native-verifier scripts unchanged.
 - Native KERIpy source at `84301a9ff4bbb644ce134f9649ad56b49aa130f2`. The
@@ -19,10 +19,10 @@ skipped by ordinary instrumentation runs without one.
   `425e06847dbdb617b27a5bf66ebed0bec8336dae0c18902d3f30a37b814cfb36`, and
   manifest SHA-256
   `4b5197f8d91ecda56260e7cc7337d85586499cc3c668342e9757d7de81182629`.
-- An emulator clock within one second of the host. The test refuses a larger
+- A device clock within one second of the host. The test refuses a larger
   difference instead of altering signed messages or relaxing KRAM freshness.
 
-## Build and run
+## Build and run on an emulator
 
 From this test branch, verify the ZIP checksum and lock, then use the canonical
 importer. The `-r` installs update the emulator apps without clearing data.
@@ -68,3 +68,35 @@ and local metadata and should be reviewed before sharing.
 
 The runtime v2, fetched-WebAssembly, signing-root confidentiality, and pending
 operation recovery boundaries remain open independently of this test.
+
+## Physical-device preparation
+
+Physical-device testing is opt-in and uses the separate debug application ID
+`org.kerifoundation.fortandroid.seditest` and test ID
+`org.kerifoundation.fortandroid.seditest.test`. The standard app and its data
+must be left intact. Before installing, select the intended device by its exact
+ADB serial and check every device user, including retained packages, for both
+test IDs. Stop if either ID already exists or if the device is not authorized.
+
+After importing the qualified runtime as above, build both APKs:
+
+```sh
+./gradlew -PsediPhysicalTest=true :app:assembleDebug :app:assembleDebugAndroidTest
+```
+
+Inspect the APK manifests and signatures: the app must be debuggable, have no
+shared user ID, and use the test application ID; the instrumentation APK must
+use the test ID, target that application ID, and have the same signing
+certificate. Verify the packaged runtime with the command above.
+
+With those checks complete, install the app and then the instrumentation APK
+using `adb -s "$ANDROID_SERIAL" install` and their respective paths above.
+Do not replace an existing package, uninstall anything, or clear app data. If
+installation fails, preserve the error and investigate without bypassing the
+device's verification. Check that the phone's clock agrees with the host before
+running the host command above with `--device "$ANDROID_SERIAL"` and the
+additional `--physical-device` flag. The test checks the selected serial,
+isolated instrumentation target, app debuggability, and clock before running.
+Keep the device's network settings unchanged; an offline test requires separate
+authorization. A successful physical run must be recorded separately from the
+emulator result, and the limitations described above still apply.

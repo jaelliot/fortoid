@@ -12,12 +12,17 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from sedi_android_target import select_package, verify_physical_target
+
 parser = argparse.ArgumentParser()
 for option in ("adb", "device", "keripy", "fortweb", "output", "manifest-sha256", "fortweb-commit"):
     parser.add_argument(f"--{option}", required=True)
+parser.add_argument("--physical-device", action="store_true")
 args = parser.parse_args()
-if not args.device.startswith("emulator-"):
-    parser.error("this synthetic test targets an emulator only")
+try:
+    package = select_package(args.device, args.physical_device)
+except ValueError as error:
+    parser.error(str(error))
 keripy = Path(args.keripy).resolve(strict=True)
 fortweb = Path(args.fortweb).resolve(strict=True)
 root = Path(args.output).resolve()
@@ -44,15 +49,17 @@ from tests.sedi.test_ipex_sedi import _KRAM_CONFIG
 
 run_id = uuid.uuid4().hex
 remote = f"files/sedi-core-{run_id}"
-package = "org.kerifoundation.fortandroid"
+test_package = f"{package}.test"
 adb = [args.adb, "-s", args.device]
+if args.physical_device:
+    verify_physical_target(adb, args.device)
 clock_start = time.time()
 device_clock = subprocess.run(adb + ["shell", "date", "+%s.%3N"], capture_output=True,
                               text=True, check=True, timeout=15)
 clock_end = time.time()
 clock_offset = float(device_clock.stdout.strip()) - (clock_start + clock_end) / 2
 if abs(clock_offset) > 1:
-    raise RuntimeError("emulator clock differs from host by more than one second")
+    raise RuntimeError("device clock differs from host by more than one second")
 children = {}
 logs = {}
 test = None
@@ -70,7 +77,7 @@ def receive(name, timeout=240):
             (root / name).write_bytes(result.stdout)
             return result.stdout
         time.sleep(0.1)
-    raise TimeoutError(f"emulator did not provide {name}")
+    raise TimeoutError(f"device did not provide {name}")
 
 
 def send(name, data):
@@ -97,8 +104,8 @@ try:
     test = subprocess.Popen(adb + ["shell", "am", "instrument", "-w", "-r", "-e", "class",
         "org.kerifoundation.fortandroid.RuntimeLifecycleDiagnosticTest#syntheticCoreSediPresentation",
         "-e", "runId", run_id, "-e", "manifestSha256", args.manifest_sha256,
-        "-e", "fortwebCommit", args.fortweb_commit,
-        "org.kerifoundation.fortandroid.test/androidx.test.runner.AndroidJUnitRunner"],
+        "-e", "fortwebCommit", args.fortweb_commit, "-e", "expectedPackage", package,
+        f"{test_package}/androidx.test.runner.AndroidJUnitRunner"],
         stdout=instrumentation_log, stderr=subprocess.STDOUT)
     holder = json.loads(receive("holder.json"))
     fixture = subprocess.run([sys.executable, fortweb / "playwright/fixtures/sedi-core-reference.py",
@@ -130,7 +137,7 @@ try:
     cesr = base64.b64decode(presentation["exchange"]["cesr"], validate=True)
     digest = hashlib.sha256(cesr).hexdigest()
     if digest != receive("grant-cesr.sha256").decode().strip():
-        raise AssertionError("Grant bytes differ across emulator transfer")
+        raise AssertionError("Grant bytes differ across device transfer")
     timing = json.loads(receive("grant-timing.json"))
     expected = {"wrong": "rejected wrong evidence", "missing": "rejected missing evidence",
                 "missing-agent": "rejected missing-agent evidence", "missing-proof": "rejected missing-proof evidence"}
