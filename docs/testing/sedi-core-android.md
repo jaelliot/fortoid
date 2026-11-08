@@ -11,14 +11,14 @@ skipped by ordinary instrumentation runs without one.
 
 - An Android emulator or an explicitly selected physical device, the Android
   SDK, a JDK, and a Python environment with the KERIpy test dependencies.
-- FortWeb checkout at `374583defa75a6e2e0eb933e5a3cbdef192f79e4`, with the
+- FortWeb checkout at `a88507b38b6cf15a938b80ce4833f93642b9c7aa`, with the
   committed Core fixture and native-verifier scripts unchanged.
 - Native KERIpy source at `84301a9ff4bbb644ce134f9649ad56b49aa130f2`. The
   host test checks the two reference files used by the verifier.
-- The qualified FortWeb ZIP with SHA-256
-  `425e06847dbdb617b27a5bf66ebed0bec8336dae0c18902d3f30a37b814cfb36`, and
+- The candidate FortWeb ZIP with SHA-256
+  `275e48af129a8329cd8870fb799981f14466f88758ad02ba1d7a479cd1d4f1e5`, and
   manifest SHA-256
-  `4b5197f8d91ecda56260e7cc7337d85586499cc3c668342e9757d7de81182629`.
+  `665722ddca6a8a367086e439b64f4c15f888df7e36287954f19948a3ba7e6644`.
 - A device clock within one second of the host. The test refuses a larger
   difference instead of altering signed messages or relaxing KRAM freshness.
 
@@ -41,8 +41,8 @@ adb -s "$ANDROID_EMULATOR" install -r app/build/outputs/apk/androidTest/debug/ap
   --adb "$(command -v adb)" --device "$ANDROID_EMULATOR" \
   --keripy "$KERIPY_SOURCE" --fortweb "$FORTWEB_SOURCE" \
   --output "$NEW_RESULTS_DIRECTORY" \
-  --manifest-sha256 4b5197f8d91ecda56260e7cc7337d85586499cc3c668342e9757d7de81182629 \
-  --fortweb-commit 374583defa75a6e2e0eb933e5a3cbdef192f79e4
+  --manifest-sha256 665722ddca6a8a367086e439b64f4c15f888df7e36287954f19948a3ba7e6644 \
+  --fortweb-commit a88507b38b6cf15a938b80ce4833f93642b9c7aa
 ```
 
 The test checks the installed manifest and all 160 files, creates fresh
@@ -69,6 +69,10 @@ timestamp or verifier freshness settings. Preserve failed outputs and signed
 state; do not clear a pending marker. Raw outputs contain synthetic evidence
 and local metadata and should be reviewed before sharing.
 
+Earlier device testing used FortWeb commit
+`374583defa75a6e2e0eb933e5a3cbdef192f79e4` and the original qualified runtime.
+The updated pin above has not yet been rerun on a physical device.
+
 The runtime v2, fetched-WebAssembly, signing-root confidentiality, and pending
 operation recovery boundaries remain open independently of this test.
 
@@ -82,7 +86,7 @@ ADB serial and check every device user, including retained packages, for both
 test IDs. Stop if the device is unauthorized or an existing package cannot be
 identified as the isolated test installation.
 
-After importing the qualified runtime as above, build both APKs:
+After importing the candidate runtime as above, build both APKs:
 
 ```sh
 ./gradlew -PsediPhysicalTest=true :app:assembleDebug :app:assembleDebugAndroidTest
@@ -125,8 +129,8 @@ git rev-parse HEAD
 "$KERIPY_PYTHON" tools/sedi-core-android-test.py \
   --physical-device --app-restart --adb "$(command -v adb)" --device "$ANDROID_SERIAL" \
   --keripy "$KERIPY_SOURCE" --fortweb "$FORTWEB_SOURCE" --output "$NEW_RESULTS_DIRECTORY" \
-  --manifest-sha256 4b5197f8d91ecda56260e7cc7337d85586499cc3c668342e9757d7de81182629 \
-  --fortweb-commit 374583defa75a6e2e0eb933e5a3cbdef192f79e4
+  --manifest-sha256 665722ddca6a8a367086e439b64f4c15f888df7e36287954f19948a3ba7e6644 \
+  --fortweb-commit a88507b38b6cf15a938b80ce4833f93642b9c7aa
 ```
 
 The write phase validates the fresh Grant with native KERIpy and closes the
